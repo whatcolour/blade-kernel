@@ -23,6 +23,7 @@
 #include "taos_common.h"
 #include <linux/input.h>
 #include <linux/miscdevice.h>
+#include <linux/wakelock.h>
 
 
 #define TAOS_INT_GPIO 42
@@ -30,20 +31,20 @@
 
 
 #define TAOS_DEVICE_NAME		"taos"
-#define TAOS_DEVICE_ID       "taos"
+#define TAOS_DEVICE_ID			"taos"
 #define TAOS_ID_NAME_SIZE		10
-#define TAOS_TRITON_CHIPIDVAL   	0x00
-#define TAOS_TRITON_MAXREGS     	32
+#define TAOS_TRITON_CHIPIDVAL		0x00
+#define TAOS_TRITON_MAXREGS		32
 #define TAOS_DEVICE_ADDR1		0x29
-#define TAOS_DEVICE_ADDR2       	0x39
-#define TAOS_DEVICE_ADDR3       	0x49
+#define TAOS_DEVICE_ADDR2		0x39
+#define TAOS_DEVICE_ADDR3		0x49
 #define TAOS_MAX_NUM_DEVICES		3
 #define TAOS_MAX_DEVICE_REGS		32
 #define I2C_MAX_ADAPTERS		8
 
 // TRITON register offsets
-#define TAOS_TRITON_CNTRL 		0x00
-#define TAOS_TRITON_ALS_TIME 		0X01
+#define TAOS_TRITON_CNTRL		0x00
+#define TAOS_TRITON_ALS_TIME		0X01
 #define TAOS_TRITON_PRX_TIME		0x02
 #define TAOS_TRITON_WAIT_TIME		0x03
 #define TAOS_TRITON_ALS_MINTHRESHLO	0X04
@@ -116,8 +117,9 @@ static void taos_als_work(struct work_struct *w);
 static void taos_prox_work(struct work_struct *w);
 static void taos_report_value(int mask);
 static int calc_distance(int value);
-	
-static int light_on=0;  
+static struct wake_lock taos_wake_lock;
+
+static int light_on= 0;  
 static int prox_on = 0;
 
 struct alsprox_data {
@@ -335,7 +337,7 @@ static void taos_als_work(struct work_struct *w)
     	if ((ret = (i2c_smbus_write_byte(taos_datap->client, (TAOS_TRITON_CMD_REG|TAOS_TRITON_CMD_SPL_FN|TAOS_TRITON_CMD_PROXALS_INTCLR)))) < 0) {
    		printk(KERN_CRIT "TAOS: i2c_smbus_write_byte failed in clear als interrupt\n");
 	}
-		
+
 	taos_report_value(0);
 }
 
@@ -349,11 +351,11 @@ static void taos_prox_work(struct work_struct *w)
 	 {           
 	 	if ((ret = (i2c_smbus_write_word_data(taos_datap->client, (0xA0 | TAOS_TRITON_PRX_MAXTHRESHLO),sat_prox))) < 0) {        	        
 			pr_crit(TAOS_TAG "i2c_smbus_write_byte() to TAOS_TRITON_PRX_MAXTHRESHLO\n");                	
-			    	
+
 			}           
 		if ((ret = (i2c_smbus_write_word_data(taos_datap->client, (0xA0 | TAOS_TRITON_PRX_MINTHRESHLO),taos_cfgp->prox_threshold_lo))) < 0) {        	       
 			pr_crit(TAOS_TAG "i2c_smbus_write_byte() to TAOS_TRITON_PRX_MINTHRESHLO\n");                	
-			       
+
 			}            
 		prox_cur_infop->prox_event = 1;                     
 	}        
@@ -361,28 +363,28 @@ static void taos_prox_work(struct work_struct *w)
 	{            
 		if ((ret = (i2c_smbus_write_word_data(taos_datap->client, (0xA0 | TAOS_TRITON_PRX_MAXTHRESHLO),taos_cfgp->prox_threshold_hi))) < 0) {    	       
 			pr_crit(TAOS_TAG "i2c_smbus_write_byte() to TAOS_TRITON_PRX_MAXTHRESHLO\n");            	
-			      	 
+
 			}             
 		if ((ret = (i2c_smbus_write_word_data(taos_datap->client, (0xA0 | TAOS_TRITON_PRX_MINTHRESHLO),0))) < 0) {    	    
 			pr_crit(TAOS_TAG "i2c_smbus_write_byte() to TAOS_TRITON_PRX_MINTHRESHLO\n");            
-			    	 
+
 			}             
 		prox_cur_infop->prox_event = 0;                             
 	}   
       
 	 if ((prx_hi= (i2c_smbus_read_word_data(taos_datap->client, (0xA0 | TAOS_TRITON_PRX_MAXTHRESHLO)))) < 0) {        	        
 		pr_crit(TAOS_TAG "i2c_smbus_write_byte() to TAOS_TRITON_PRX_MAXTHRESHLO\n");                	
-			    	
+
 		}           
 	if ((prx_lo = (i2c_smbus_read_word_data(taos_datap->client, (0xA0 | TAOS_TRITON_PRX_MINTHRESHLO)))) < 0) {        	       
 		pr_crit(TAOS_TAG "i2c_smbus_write_byte() to TAOS_TRITON_PRX_MINTHRESHLO\n");                	
-			       
+
 		}    
 
 	if ((ret = (i2c_smbus_write_byte(taos_datap->client, (TAOS_TRITON_CMD_REG|TAOS_TRITON_CMD_SPL_FN|TAOS_TRITON_CMD_PROXALS_INTCLR)))) < 0) {        
 		pr_crit(TAOS_TAG "i2c_smbus_write_byte failed in clear interrupt\n");                                   
 	}    
-	
+
 	taos_report_value(1);
 }
 
@@ -477,7 +479,7 @@ static int taos_probe(struct i2c_client *clientp, const struct i2c_device_id *id
         }
 	taos_datap->client = clientp;
 	i2c_set_clientdata(clientp, taos_datap);
-	
+
 	//write bytes to address control registers
     for(i = 0; i < TAOS_MAX_DEVICE_REGS; i++) {
 		if((ret = (i2c_smbus_write_byte(clientp, (TAOS_TRITON_CMD_REG | (TAOS_TRITON_CNTRL + i))))) < 0) {
@@ -509,7 +511,7 @@ static int taos_probe(struct i2c_client *clientp, const struct i2c_device_id *id
     	if ((ret = (i2c_smbus_write_word_data(clientp, (0xA0 | TAOS_TRITON_ALS_MINTHRESHLO),0))) < 0) {
         	printk(KERN_ERR "TAOS: i2c_smbus_write_byte() to chan0/1/lo/hi reg failed in taos_probe()\n");
         }
-	
+
 	INIT_DELAYED_WORK(&taos_datap->als_work, taos_als_work);
 	INIT_WORK(&taos_datap->prox_work, taos_prox_work); 
 
@@ -527,11 +529,11 @@ static int taos_probe(struct i2c_client *clientp, const struct i2c_device_id *id
 		printk(KERN_CRIT "taos request interrupt failed\n");
         	return ret;
     	}
-	
+
 	strlcpy(clientp->name, TAOS_DEVICE_ID, I2C_NAME_SIZE);
 	strlcpy(taos_datap->taos_name, TAOS_DEVICE_ID, TAOS_ID_NAME_SIZE);
 	taos_datap->valid = 0;
-	
+
 	init_MUTEX(&taos_datap->update_lock);
 	if (!(taos_cfgp = kmalloc(sizeof(struct taos_cfg), GFP_KERNEL))) {
 		printk(KERN_ERR "TAOS: kmalloc for struct taos_cfg failed in taos_probe()\n");
@@ -582,7 +584,7 @@ static int taos_probe(struct i2c_client *clientp, const struct i2c_device_id *id
 
 exit_input_register_device_failed:
 	input_free_device(alsprox->input_dev);
-	
+
 exit_input_dev_alloc_failed:
 exit_alloc_data_failed:
 	kfree(alsprox);
@@ -864,7 +866,13 @@ static int taos_ioctl(struct inode *inode, struct file *file, unsigned int cmd, 
 		        sat_als = (256 - taos_cfgp->prox_int_time) << 10;
 	        sat_prox = (256 - taos_cfgp->prox_adc_time) << 10;
                 	break;
-		case TAOS_IOCTL_PROX_ON:				
+		case TAOS_IOCTL_PROX_ON:
+			// Use wake lock to stop suspending during calls. This should not be necessary and means that if an app leaves the prox sensor on 
+			// the device will not suspend, but that should not happens. Apps should always turn off sensors when not needed.
+			pr_crit(TAOS_TAG "get wake lock");
+			wake_lock_init(&taos_wake_lock, WAKE_LOCK_SUSPEND, "taos");
+			wake_lock(&taos_wake_lock);
+
 			if ((ret = (i2c_smbus_write_byte_data(taos_datap->client, (TAOS_TRITON_CMD_REG|0x00), 0x00))) < 0) {
 				printk(KERN_ERR "TAOS: i2c_smbus_write_byte_data failed in ioctl prox_on\n");
                                 return (ret);
@@ -897,7 +905,7 @@ static int taos_ioctl(struct inode *inode, struct file *file, unsigned int cmd, 
                                 printk(KERN_ERR "TAOS: i2c_smbus_write_byte_data failed in ioctl prox_on\n");
                                 return (ret);
 			}
-						
+
             		if ((ret = (i2c_smbus_write_byte(taos_datap->client, (TAOS_TRITON_CMD_REG|TAOS_TRITON_CMD_SPL_FN|TAOS_TRITON_CMD_PROX_INTCLR)))) < 0) {
                 		printk(KERN_ERR "TAOS: i2c_smbus_write_byte failed in ioctl als_on\n");
                 		return (ret);
@@ -925,16 +933,19 @@ static int taos_ioctl(struct inode *inode, struct file *file, unsigned int cmd, 
             		prox_cur_infop->prox_clear = 0;
             		prox_cur_infop->prox_data = 0;
 			pr_crit(TAOS_TAG "TAOS_IOCTL_PROX_ON\n");		
-			
+
 			prox_on = 1;
 			break;
-                case TAOS_IOCTL_PROX_OFF:
+		case TAOS_IOCTL_PROX_OFF:
 			if ((ret = (i2c_smbus_write_byte_data(taos_datap->client, (TAOS_TRITON_CMD_REG|0x00), 0x00))) < 0) {
                                 printk(KERN_ERR "TAOS: i2c_smbus_write_byte_data failed in ioctl prox_off\n");
                                 return (ret);
                         	}
 			prox_on = 0;	
-			pr_crit(TAOS_TAG "TAOS_IOCTL_PROX_OFF\n");	
+			pr_crit(TAOS_TAG "TAOS_IOCTL_PROX_OFF\n");
+			// destroy wake lock
+			wake_lock_destroy(&taos_wake_lock);
+			pr_crit(TAOS_TAG "release wake lock");	
 			break;
 		case TAOS_IOCTL_PROX_DATA:
                         ret = copy_to_user((struct taos_prox_info *)arg, prox_cur_infop, sizeof(struct taos_prox_info));
@@ -972,7 +983,7 @@ static int taos_ioctl(struct inode *inode, struct file *file, unsigned int cmd, 
 				taos_cfgp->prox_threshold_lo = ((sat_prox*12)/100);
 				taos_cfgp->prox_threshold_hi = ((sat_prox*15)/100);
 			}
-			
+
 			pr_crit(KERN_ERR "taos prox_cal_threshold_hi=%d,prox_cal_threshold_lo=%d\n",taos_cfgp->prox_threshold_hi,taos_cfgp->prox_threshold_lo);
 			break;
 		default:
@@ -1000,7 +1011,7 @@ static int taos_get_lux(void) {
         	}
         	chdata[i] = i2c_smbus_read_byte(taos_datap->client);
 	}
-	
+
 	tmp = (taos_cfgp->als_time + 25)/50;
         TritonTime.numerator = 1;
         TritonTime.denominator = tmp;
@@ -1015,7 +1026,7 @@ static int taos_get_lux(void) {
 	raw_ir    = chdata[3];
 	raw_ir    <<= 8;
 	raw_ir    |= chdata[2];
-	
+
 	als_intr_threshold_hi_param = raw_clear + raw_clear/5;
     	als_intr_threshold_lo_param = raw_clear - raw_clear/5;
 
@@ -1026,7 +1037,7 @@ static int taos_get_lux(void) {
     	if ((ret = (i2c_smbus_write_word_data(taos_datap->client, (0xA0 | TAOS_TRITON_ALS_MINTHRESHLO),als_intr_threshold_lo_param))) < 0) {
         	        printk(KERN_ERR "TAOS: i2c_smbus_write_byte() to chan0/1/lo/hi reg failed in taos_get_lux()\n");
         	}
-	
+
 	if(raw_ir > raw_clear) {
 		raw_lux = raw_ir;
 		raw_ir = raw_clear;
@@ -1120,4 +1131,3 @@ MODULE_LICENSE("GPL");
 
 module_init(taos_init);
 module_exit(taos_exit);
-
